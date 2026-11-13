@@ -215,6 +215,31 @@ msgstr "选择导出目的位置"
 msgid "Save"
 msgstr "保存"
 
+#: source/app/service-providers/menu/menu.darwin.ts
+#: source/app/service-providers/menu/menu.win32.ts
+#: source/win-main/DocumentTabs.vue
+#: source/win-main/file-manager/util/file-item-context.ts
+msgid "Reload from disk"
+msgstr "从磁盘重新加载"
+
+#: source/app/service-providers/documents/index.ts
+msgid "Could not reload file"
+msgstr "无法重新加载文件"
+
+#: source/app/service-providers/documents/index.ts
+#, javascript-format
+msgid "Could not reload file %s: %s"
+msgstr "无法重新加载文件 %s：%s"
+
+#: source/app/service-providers/documents/index.ts
+#, javascript-format
+msgid "%s contains unsaved changes."
+msgstr "%s 包含未保存的更改。"
+
+#: source/app/service-providers/documents/index.ts
+msgid "Reloading from disk will discard the unsaved changes in every editor showing this file. Continue?"
+msgstr "从磁盘重新加载会丢弃此文件在所有编辑器中的未保存更改。是否继续？"
+
 #: source/app/service-providers/commands/export.ts:173
 #, javascript-format
 msgid "Exporting file %s"

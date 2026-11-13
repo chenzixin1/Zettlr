@@ -1,0 +1,2 @@
+# The root project uses Yarn; this standalone test runner intentionally uses npm.
+!package-lock.json

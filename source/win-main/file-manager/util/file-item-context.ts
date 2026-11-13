@@ -16,12 +16,14 @@ import { trans } from '@common/i18n-renderer'
 import showPopupMenu, { type AnyMenuItem } from '@common/modules/window-register/application-menu-helper'
 import type { CodeFileDescriptor, MDFileDescriptor, OtherFileDescriptor } from '@dts/common/fsal'
 import type { WindowControlsIPCAPI } from 'source/app/service-providers/windows'
-import { useConfigStore } from 'source/pinia'
+import type { DocumentManagerIPCAPI } from 'source/app/service-providers/documents'
+import { useConfigStore, useDocumentTreeStore } from 'source/pinia'
 
 const ipcRenderer = window.ipc
 
 export function displayFileContext (event: MouseEvent, fileObject: MDFileDescriptor|CodeFileDescriptor|OtherFileDescriptor, el: HTMLElement, callback: (clickedID: string) => void): void {
   const configStore = useConfigStore()
+  const documentTreeStore = useDocumentTreeStore()
   const isMac = process.platform === 'darwin'
   const isWin = process.platform === 'win32'
 
@@ -84,6 +86,21 @@ export function displayFileContext (event: MouseEvent, fileObject: MDFileDescrip
       type: 'normal'
     }
   ]
+
+  const isOpen = documentTreeStore.paneData.some(leaf => leaf.openFiles.some(doc => doc.path === fileObject.path))
+  if (fileObject.type !== 'other' && isOpen) {
+    template.splice(1, 0, {
+      label: trans('Reload from disk'),
+      accelerator: 'CmdOrCtrl+Alt+R',
+      type: 'normal',
+      action () {
+        ipcRenderer.invoke('documents-provider', {
+          command: 'reload-file',
+          payload: { path: fileObject.path }
+        } satisfies DocumentManagerIPCAPI).catch(err => console.error(err))
+      }
+    })
+  }
 
   if (configStore.config.app.openFiles.includes(fileObject.path)) {
     template.push(

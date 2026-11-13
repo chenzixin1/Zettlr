@@ -1,0 +1,54 @@
+name: Personal reload from disk
+
+on:
+  push:
+    branches: [personal/reload-from-disk]
+  workflow_dispatch:
+    inputs:
+      build_macos:
+        description: Build an ad-hoc signed Apple Silicon personal app
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: npm --prefix scripts/personal ci --ignore-scripts --no-audit --no-fund
+      - run: npm --prefix scripts/personal test
+
+  macos:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_macos
+    needs: regression
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: corepack enable
+      - run: yarn install --immutable
+      - run: yarn lint:types
+      - run: yarn test
+      - run: yarn package:personal:mac
+      - name: Verify local signature and archive
+        run: |
+          codesign --verify --deep --strict "out/Zettlr Personal-darwin-arm64/Zettlr Personal.app"
+          ditto -c -k --sequesterRsrc --keepParent "out/Zettlr Personal-darwin-arm64/Zettlr Personal.app" "out/Zettlr-Personal-arm64.zip"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Zettlr-Personal-arm64
+          path: out/Zettlr-Personal-arm64.zip
+          retention-days: 14

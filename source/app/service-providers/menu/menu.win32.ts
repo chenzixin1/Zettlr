@@ -186,6 +186,14 @@ export default function getMenu (
           }
         },
         {
+          id: 'menu.reload_file',
+          label: trans('Reload from disk'),
+          accelerator: 'Ctrl+Alt+R',
+          click: function (_menuItem, focusedWindow) {
+            (focusedWindow as BrowserWindow|undefined)?.webContents.send('shortcut', 'reload-file')
+          }
+        },
+        {
           type: 'separator'
         },
         {

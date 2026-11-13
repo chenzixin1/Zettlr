@@ -1,6 +1,6 @@
 {
-  "name": "zettlr",
-  "productName": "Zettlr",
+  "name": "zettlr-personal",
+  "productName": "Zettlr Personal",
   "homepage": "https://www.zettlr.com",
   "author": {
     "name": "Hendrik Erz",
@@ -10,7 +10,7 @@
     "type": "git",
     "url": "git://github.com/Zettlr/Zettlr.git"
   },
-  "version": "4.9.0",
+  "version": "4.9.0-personal.1",
   "license": "GPL-3.0",
   "description": "Your One-Stop Publication Workbench",
   "main": ".webpack/main/index.cjs",
@@ -40,7 +40,8 @@
     "lint:po": "node scripts/lint-po.mjs",
     "lint": "yarn lint:code && yarn lint:types",
     "shortcut:install": "node scripts/develop-shortcut.mjs install",
-    "shortcut:uninstall": "node scripts/develop-shortcut.mjs uninstall"
+    "shortcut:uninstall": "node scripts/develop-shortcut.mjs uninstall",
+    "package:personal:mac": "cross-env NODE_ENV=production ZETTLR_DISABLE_UPDATE_CHECK=1 electron-forge package --platform=darwin --arch=arm64"
   },
   "config": {
     "forge": "./forge.config.js"

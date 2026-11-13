@@ -453,8 +453,20 @@ function handleTabbarContext (event: MouseEvent): void {
 }
 
 function handleContextMenu (event: MouseEvent, doc: OpenDocument): void {
+  const reloadItem: AnyMenuItem = {
+    label: trans('Reload from disk'),
+    accelerator: 'CmdOrCtrl+Alt+R',
+    type: 'normal',
+    action () {
+      ipcRenderer.invoke('documents-provider', {
+        command: 'reload-file',
+        payload: { path: doc.path }
+      } satisfies DocumentManagerIPCAPI).catch(e => console.error(e))
+    }
+  }
   const descriptor = workspaceStore.descriptorMap.get(doc.path)
   if (descriptor === undefined || descriptor.type === 'directory') {
+    showPopupMenu({ x: event.clientX, y: event.clientY }, [reloadItem])
     return
   }
 
@@ -462,6 +474,8 @@ function handleContextMenu (event: MouseEvent, doc: OpenDocument): void {
   const isWin = process.platform === 'win32'
 
   const items: AnyMenuItem[] = [
+    reloadItem,
+    { type: 'separator' },
     {
       label: trans('Close tab'),
       type: 'normal',

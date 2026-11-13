@@ -108,6 +108,17 @@ ipcRenderer.on('citeproc-database-updated', (_event, _dbPath: string) => {
 })
 
 ipcRenderer.on('shortcut', (event, command) => {
+  if (command === 'reload-file') {
+    // Menu commands address the active document even if focus is in a sidebar.
+    if (documentTreeStore.lastLeafId === props.leafId && props.activeFile?.path === props.file.path) {
+      ipcRenderer.invoke('documents-provider', {
+        command: 'reload-file',
+        payload: { path: props.file.path }
+      } satisfies DocumentManagerIPCAPI).catch(e => console.error(e))
+    }
+    return
+  }
+
   if (currentEditor?.hasFocusWithin() !== true) {
     return // None of our business
   }

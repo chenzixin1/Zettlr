@@ -138,6 +138,7 @@ export type DocumentManagerIPCAPI = IPCAPI<{
   'set-pinned': LeafLoc & { path: string, pinned: boolean }
   'retrieve-tab-config': { windowId: string }
   'save-file': { path: string }
+  'reload-file': { path: string }
   'open-file': LeafLoc & { path: string, newTab: boolean }
   'close-file': LeafLoc & { path: string }
   'close-file-everywhere': { path: string }
@@ -210,6 +211,10 @@ export default class DocumentManager extends ProviderContract {
    * @var {string[]}
    */
   private readonly _remoteChangeDialogShownFor: string[]
+
+  private readonly _documentLoads = new Map<string, Promise<Document>>()
+  private readonly _documentReloads = new Set<string>()
+  private readonly _documentSaves = new WeakMap<Document, { version: number, active: number }>()
 
   /**
    * This holds all currently opened documents somewhere across the app.
@@ -295,6 +300,9 @@ export default class DocumentManager extends ProviderContract {
         }
         case 'save-file': {
           return await this.saveFile(payload.path)
+        }
+        case 'reload-file': {
+          return await this.reloadFile(payload.path)
         }
         case 'open-file': {
           const { windowId, leafId, path, newTab } = payload
@@ -617,15 +625,28 @@ export default class DocumentManager extends ProviderContract {
   // DOCUMENT AUTHORITY FUNCTIONS
 
   public async getDocument (filePath: string): Promise<{ content: string, type: DocumentType, startVersion: number }> {
-    const existingDocument = this.documents.find(doc => doc.filePath === filePath)
-    if (existingDocument !== undefined) {
-      return {
-        content: existingDocument.document.toString(),
-        type: existingDocument.type,
-        startVersion: existingDocument.currentVersion
+    let doc = this.documents.find(doc => doc.filePath === filePath)
+    if (doc === undefined) {
+      let pendingLoad = this._documentLoads.get(filePath)
+      if (pendingLoad === undefined) {
+        // Register before the first read so concurrent editor reloads share
+        // one authority, instead of creating competing copies of a document.
+        pendingLoad = Promise.resolve().then(async () => await this.loadDocumentFromDisk(filePath))
+        this._documentLoads.set(filePath, pendingLoad)
+      }
+      try {
+        doc = await pendingLoad
+      } finally {
+        if (this._documentLoads.get(filePath) === pendingLoad) {
+          this._documentLoads.delete(filePath)
+        }
       }
     }
 
+    return { content: doc.document.toString(), type: doc.type, startVersion: doc.currentVersion }
+  }
+
+  private async loadDocumentFromDisk (filePath: string): Promise<Document> {
     // TODO: We also need to be able to load files not present in the file tree!
     const descriptor = await this._app.fsal.getDescriptorForAnySupportedFile(filePath)
     if (descriptor === undefined || descriptor.type === 'other') {
@@ -634,6 +655,17 @@ export default class DocumentManager extends ProviderContract {
 
     const content = await this._app.fsal.loadAnySupportedFile(filePath)
 
+    const existingDocument = this.documents.find(doc => doc.filePath === filePath)
+    if (existingDocument !== undefined) {
+      return existingDocument
+    }
+    const doc = this.createDocument(filePath, descriptor, content)
+    this.documents.push(doc)
+    this.syncWatchedFilePaths()
+    return doc
+  }
+
+  private createDocument (filePath: string, descriptor: MDFileDescriptor|CodeFileDescriptor, content: string): Document {
     let type = DocumentType.Markdown
 
     if (descriptor.type === 'code') {
@@ -658,10 +690,95 @@ export default class DocumentManager extends ProviderContract {
       saveTimeout: undefined
     }
 
-    this.documents.push(doc)
-    this.syncWatchedFilePaths()
+    return doc
+  }
 
-    return { content, type, startVersion: 0 }
+  /**
+   * Explicitly reload disk contents, preserving every buffer if the operation
+   * is cancelled, fails, or races with an edit/save in any editor for this path.
+   */
+  public async reloadFile (filePath: string): Promise<boolean> {
+    if (this._documentReloads.has(filePath) || this._documentLoads.has(filePath) || this._remoteChangeDialogShownFor.includes(filePath)) {
+      return false
+    }
+    this._documentReloads.add(filePath)
+    try {
+      return await this.reloadDocumentFromDisk(filePath)
+    } finally {
+      this._documentReloads.delete(filePath)
+    }
+  }
+
+  private async reloadDocumentFromDisk (filePath: string): Promise<boolean> {
+    const snapshot = this.documents.filter(doc => doc.filePath === filePath).map(doc => ({
+      doc,
+      version: doc.currentVersion,
+      savedVersion: doc.lastSavedVersion,
+      savedContent: doc.lastSavedContent,
+      saveVersion: this._documentSaves.get(doc)?.version ?? 0
+    }))
+    const hasChanged = (): boolean => {
+      const current = this.documents.filter(doc => doc.filePath === filePath)
+      return this._documentLoads.has(filePath) || this._remoteChangeDialogShownFor.includes(filePath) || current.length !== snapshot.length || snapshot.some(entry => {
+        const saving = this._documentSaves.get(entry.doc)
+        return !current.includes(entry.doc) || entry.doc.currentVersion !== entry.version ||
+          entry.doc.lastSavedVersion !== entry.savedVersion || entry.doc.lastSavedContent !== entry.savedContent ||
+          (saving?.active ?? 0) > 0 || (saving?.version ?? 0) !== entry.saveVersion
+      })
+    }
+    if (hasChanged()) {
+      return false
+    }
+
+    if (snapshot.some(entry => entry.version !== entry.savedVersion)) {
+      const response = await dialog.showMessageBox({
+        type: 'warning',
+        title: trans('Reload from disk'),
+        message: trans('%s contains unsaved changes.', path.basename(filePath)),
+        detail: trans('Reloading from disk will discard the unsaved changes in every editor showing this file. Continue?'),
+        buttons: [ trans('Cancel'), trans('Reload from disk') ],
+        defaultId: 0,
+        cancelId: 0
+      })
+      if (response.response !== 1 || hasChanged()) {
+        return false
+      }
+    }
+
+    let refreshed: Document
+    try {
+      const descriptor = await this._app.fsal.getDescriptorForAnySupportedFile(filePath)
+      if (descriptor === undefined || descriptor.type === 'other') {
+        throw new Error(`Cannot reload file ${filePath}`)
+      }
+      const content = await this._app.fsal.loadAnySupportedFile(filePath)
+      refreshed = this.createDocument(filePath, descriptor, content)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err)
+      dialog.showErrorBox(trans('Could not reload file'), trans('Could not reload file %s: %s', path.basename(filePath), message))
+      return false
+    }
+    if (hasChanged()) {
+      return false
+    }
+
+    // No await between the final revision check and swapping the authority.
+    // Replace all copies, including duplicates created by earlier reloads.
+    for (let idx = this.documents.length - 1; idx >= 0; idx--) {
+      if (this.documents[idx].filePath === filePath) {
+        clearTimeout(this.documents[idx].saveTimeout)
+        this.documents.splice(idx, 1)
+      }
+    }
+    for (let idx = this._ignoreChanges.length - 1; idx >= 0; idx--) {
+      if (this._ignoreChanges[idx] === filePath) {
+        this._ignoreChanges.splice(idx, 1)
+      }
+    }
+    this.documents.push(refreshed)
+    this.syncWatchedFilePaths()
+    this.broadcastEvent(DP_EVENTS.FILE_REMOTELY_CHANGED, { filePath })
+    return true
   }
 
   private async pullUpdates (filePath: string, clientVersion: number): Promise<Update[]|false> {
@@ -1056,6 +1173,9 @@ current contents from the editor somewhere else, and restart the application.`
    * @param   {string}  filePath  The file in question
    */
   private async handleRemoteChange (filePath: string): Promise<void> {
+    if (this._documentReloads.has(filePath)) {
+      return
+    }
     // First thing we have to look up is: Did the file really change? Then, we
     // have to update the file descriptors across all leafs and broadcast an event.
     const openFiles: OpenDocument[] = []
@@ -1087,6 +1207,10 @@ current contents from the editor somewhere else, and restart the application.`
     // that merely change attributes, but not the content. We handle this case
     // next
     const diskContents = await this._app.fsal.loadAnySupportedFile(doc.descriptor.path)
+
+    if (this._documentReloads.has(filePath) || !this.documents.includes(doc)) {
+      return
+    }
 
     if (diskContents === doc.lastSavedContent) {
       return
@@ -1133,11 +1257,11 @@ current contents from the editor somewhere else, and restart the application.`
         doc.lastSavedVersion--
         this.broadcastEvent(DP_EVENTS.CHANGE_FILE_STATUS, { filePath, status: 'modification' })
       } else {
-        await this.notifyRemoteChange(filePath)
+        await this.notifyRemoteChange(filePath, doc)
       }
     } else {
       // The user has activated the setting to alwaysReloadFiles.
-      await this.notifyRemoteChange(filePath)
+      await this.notifyRemoteChange(filePath, doc)
     }
   }
 
@@ -1303,11 +1427,14 @@ current contents from the editor somewhere else, and restart the application.`
    *
    * @param {string} filePath The file in question
    */
-  public async notifyRemoteChange (filePath: string): Promise<void> {
+  public async notifyRemoteChange (filePath: string, expectedDocument?: Document): Promise<void> {
     // Here we basically only need to close the document and wait for the
     // renderers to reload themselves with getDocument, which will automatically
     // open the new document.
     const idx = this.documents.findIndex(file => file.filePath === filePath)
+    if (idx < 0 || (expectedDocument !== undefined && this.documents[idx] !== expectedDocument)) {
+      return
+    }
     this.documents.splice(idx, 1)
     // Indicate to all affected editors that they should reload the file
     this.broadcastEvent(DP_EVENTS.FILE_REMOTELY_CHANGED, { filePath })
@@ -1532,6 +1659,32 @@ current contents from the editor somewhere else, and restart the application.`
       return false
     }
 
+    const saving = this._documentSaves.get(doc) ?? { version: 0, active: 0 }
+    saving.version++
+    saving.active++
+    this._documentSaves.set(doc, saving)
+    const saveVersion = saving.version
+    const attemptedVersion = doc.currentVersion
+    const attemptedContent = doc.document.toString()
+    const previousSavedVersion = doc.lastSavedVersion
+    const previousSavedContent = doc.lastSavedContent
+    try {
+      return await this.saveDocument(doc)
+    } catch (err: unknown) {
+      // A failed write must not make a later manual reload mistake unsaved
+      // input for a clean buffer. Do not undo a newer save's markers.
+      if (saving.version === saveVersion && doc.lastSavedVersion === attemptedVersion && doc.lastSavedContent === attemptedContent) {
+        doc.lastSavedVersion = previousSavedVersion
+        doc.lastSavedContent = previousSavedContent
+      }
+      throw err
+    } finally {
+      saving.active--
+    }
+  }
+
+  private async saveDocument (doc: Document): Promise<boolean> {
+    const filePath = doc.filePath
     // If saveFile was called from a timeout, clearTimeout does nothing but the
     // timeout is reset to undefined. However, implementing this check here
     // ensures that we can programmatically call saveFile anywhere else and

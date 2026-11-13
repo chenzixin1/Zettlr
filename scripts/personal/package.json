@@ -1,0 +1,14 @@
+{
+  "name": "zettlr-personal-sync-regression",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 manual-reload.test.mjs"
+  },
+  "devDependencies": {
+    "@codemirror/collab": "6.1.1",
+    "@codemirror/state": "6.7.6",
+    "typescript": "5.9.3"
+  }
+}

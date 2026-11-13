@@ -349,3 +349,6 @@ module.exports = {
     }
   ]
 }
+
+// Personal fork: apply a separate identity, local signing, and disabled updates.
+module.exports = require('./forge.personal.config.js')(module.exports)
